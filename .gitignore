@@ -1,0 +1,12 @@
+node_modules/
+dist/
+.env
+.env.*
+!.env.example
+*.log
+data/
+__pycache__/
+*.sqlite
+*.sqlite-wal
+*.sqlite-shm
+*.zip

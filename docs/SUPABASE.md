@@ -13,7 +13,7 @@ Open your [Supabase project](https://supabase.com/dashboard/project/jqicbztaipua
 3. Open **SQL Editor → New query**. Paste and run the complete contents of [supabase/setup.sql](../supabase/setup.sql). It creates Gather's tables, private media bucket, transaction functions, access policies, and the owner association. It does not create a password or edit unrelated application tables.
 4. If owner setup reports that the user does not exist, finish step 1 and run [supabase/set-owner.sql](../supabase/set-owner.sql). The schema denies all app access until this association exists.
 
-The SQL is also available as a versioned migration at [supabase/migrations/202610160001_gather.sql](../supabase/migrations/202610160001_gather.sql), followed by `supabase/set-owner.sql`. The combined setup file is for convenience; keep both source files when updating the schema.
+The SQL is also available as a versioned migration at [supabase/migrations/202610160001_gather.sql](../supabase/migrations/202610160001_gather.sql), followed by `supabase/set-owner.sql`. The combined setup file is for convenience; keep all migration files and the owner script when updating the schema. The combined setup now also includes `202610160002_vercel.sql`.
 
 ### What the policies enforce
 
@@ -46,6 +46,8 @@ After migration succeeds, change `.env` to `GATHER_MODE=supabase`, restart the a
 
 ## 3. Host the application and importer
 
+**Vercel is the selected host.** Follow [the Vercel deployment guide](VERCEL.md), including the additional migration `202610160002_vercel.sql`. The container instructions below are an alternative deployment path.
+
 Supabase hosts the PostgreSQL database, Auth service, and private media storage. The React site, Node API, and Python extractors run in a separate application container. The repository includes a `Dockerfile`; it runs one Node process with Python dependencies installed.
 
 Set these environment variables on the hosting provider:
@@ -66,7 +68,7 @@ Set `APP_ORIGIN` to the exact HTTPS origin users open. The server rejects other 
 
 Deploy a **single running app/worker instance** for now. Import jobs use an in-process queue with statuses persisted in Supabase. If the process restarts, jobs without an active worker become retryable failed imports the next time the owner opens the collection. A long-queued job whose user session expires must be retried after signing in. This is not yet a multi-worker durable job system.
 
-No hosting provider, paid plan, domain, or public deployment has been selected or purchased. Phone browsing becomes possible after hosting; canvas editing still targets computers.
+Vercel has been selected for hosting; no public deployment or domain has been confirmed. Phone browsing becomes possible after hosting; canvas editing still targets computers.
 
 ## 4. Backups and recovery
 

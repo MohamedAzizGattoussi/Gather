@@ -8,7 +8,8 @@ import path from 'node:path';
 import { randomUUID } from 'node:crypto';
 import { Readable } from 'node:stream';
 import { clientFor, result, requireOwner, cloudState } from './cloud-client.mjs';
-import { ownerEmail, appOrigin, storageBucket, maxFileMB } from './config.mjs';
+import { ownerEmail, appOrigin, storageBucket, maxFileMB, serverlessMode } from './config.mjs';
+import { prepareUpload, finishUpload, cancelUpload } from './signed-uploads.mjs';
 import { validUrl } from './source-resolver.mjs';
 import { cloudStoreMedia, enqueueCloudImport, activeImports } from './cloud-imports.mjs';
 
@@ -66,9 +67,12 @@ cloudRouter.get('/api/state',async(req,res)=>{
   const client=req.gather.client;
   // A single app/worker process owns imports. After a restart, an owner can retry
   // interrupted jobs rather than leaving their records permanently 'importing'.
-  const pending=result(await client.from('gather_items').select('id').in('import_status',['pending','importing']));
-  const interrupted=pending.filter(i=>!activeImports.has(i.id));
-  if(interrupted.length)result(await client.from('gather_items').update({import_status:'failed',import_message:'Import was interrupted. You can retry it.'}).in('id',interrupted.map(i=>i.id)));
+  if(serverlessMode)result(await client.rpc('gather_expire_imports'));
+  else{
+    const pending=result(await client.from('gather_items').select('id').in('import_status',['pending','importing']));
+    const interrupted=pending.filter(i=>!activeImports.has(i.id));
+    if(interrupted.length)result(await client.from('gather_items').update({import_status:'failed',import_message:'Import was interrupted. You can retry it.'}).in('id',interrupted.map(i=>i.id)));
+  }
   res.json(await cloudState(client));
 });
 cloudRouter.post('/api/items',async(req,res)=>{
@@ -86,14 +90,18 @@ cloudRouter.patch('/api/items/:id',async(req,res)=>{
   res.json({ok:true});
 });
 cloudRouter.delete('/api/items/:id',async(req,res)=>{
-  const client=req.gather.client;await itemFor(client,req.params.id);
-  if(activeImports.has(req.params.id))return res.status(409).json({error:'Wait for this import to finish before deleting the reference.'});
+  const client=req.gather.client;
+  const item=await itemFor(client,req.params.id);
+  if(activeImports.has(req.params.id)||(serverlessMode&&['pending','importing'].includes(item.import_status)&&new Date(item.import_expires_at)>new Date()))return res.status(409).json({error:'Wait for this import to finish before deleting the reference.'});
   const assets=result(await client.from('gather_assets').select('filename').eq('item_id',req.params.id));
   result(await client.from('gather_items').delete().eq('id',req.params.id));
   if(assets.length)await client.storage.from(storageBucket).remove(assets.map(a=>a.filename));
   res.json({ok:true});
 });
-cloudRouter.post('/api/items/:id/media',async(req,res,next)=>{await itemFor(req.gather.client,req.params.id);next();},upload.array('files',40),async(req,res)=>{
+cloudRouter.post('/api/items/:id/uploads',async(req,res)=>{await itemFor(req.gather.client,req.params.id);res.status(201).json(await prepareUpload(req.gather,req.params.id,req.body));});
+cloudRouter.post('/api/items/:id/uploads/:uploadId/finish',async(req,res)=>{await itemFor(req.gather.client,req.params.id);const id=await finishUpload(req.gather,req.params.id,req.params.uploadId);res.json({ok:true,id});});
+cloudRouter.delete('/api/items/:id/uploads/:uploadId',async(req,res)=>{await cancelUpload(req.gather,req.params.id,req.params.uploadId);res.json({ok:true});});
+cloudRouter.post('/api/items/:id/media',async(req,res,next)=>{if(serverlessMode)return res.status(400).json({error:'Upload files directly to private storage using the Gather upload flow.'});await itemFor(req.gather.client,req.params.id);next();},upload.array('files',40),async(req,res)=>{
   const files=req.files||[];let saved=0;
   try{
     if(!files.length)return res.status(400).json({error:'Choose image or video files to attach.'});
@@ -111,7 +119,8 @@ cloudRouter.post('/api/items/:id/import',async(req,res)=>{if(exporting)return re
 cloudRouter.get('/media/:id',async(req,res)=>{
   const client=req.gather.client,asset=result(await client.from('gather_assets').select('filename').eq('id',req.params.id).maybeSingle());
   if(!asset)return res.sendStatus(404);
-  const signed=result(await client.storage.from(storageBucket).createSignedUrl(asset.filename,60));
+  const signed=result(await client.storage.from(storageBucket).createSignedUrl(asset.filename,serverlessMode?3600:60));
+  if(serverlessMode)return res.redirect(302,signed.signedUrl);
   // Do not expose the signed URL to the browser; proxy media and Range headers.
   const abort=new AbortController();const timer=setTimeout(()=>abort.abort(),120000);
   const response=await fetch(signed.signedUrl,{headers:req.headers.range?{Range:req.headers.range}:{},signal:abort.signal});
@@ -150,7 +159,23 @@ cloudRouter.post('/api/password',async(req,res)=>{
   result(await req.gather.client.auth.updateUser({password}));await verify.auth.signOut({scope:'local'});res.json({ok:true});
 });
 cloudRouter.get('/api/settings',(req,res)=>res.json({mode:'supabase',dataDir:'Your private Gather cloud storage',maxFileMB}));
+cloudRouter.get('/api/backup-manifest',async(req,res)=>{
+  if(serverlessMode){
+    result(await req.gather.client.rpc('gather_expire_imports'));
+    const pending=result(await req.gather.client.from('gather_items').select('id').in('import_status',['pending','importing']).limit(1));
+    if(pending.length)return res.status(409).json({error:'Let imports finish before downloading your backup.'});
+  }else if(activeImports.size)return res.status(409).json({error:'Let imports finish before downloading your backup.'});
+  const snapshot=result(await req.gather.client.rpc('gather_export'));
+  const media=[];
+  for(let offset=0;offset<snapshot.assets.length;offset+=100){
+    const batch=snapshot.assets.slice(offset,offset+100);
+    const signed=result(await req.gather.client.storage.from(storageBucket).createSignedUrls(batch.map(a=>a.filename),3600));
+    for(let i=0;i<batch.length;i++){if(signed[i].error||!signed[i].signedUrl)throw new Error('A media file could not be included in this backup.');media.push({id:batch[i].id,size:Number(batch[i].size),url:signed[i].signedUrl});}
+  }
+  res.json({snapshot,media});
+});
 cloudRouter.get('/api/backup',async(req,res)=>{
+  if(serverlessMode)return res.status(400).json({error:'Download the full backup from Gather Settings so large files can transfer directly from private storage.'});
   if(exporting||activeImports.size)return res.status(409).json({error:'Wait for imports or the current backup to finish before downloading a backup.'});
   exporting=true;
   const archive=new ZipArchive({zlib:{level:6}});

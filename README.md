@@ -2,7 +2,7 @@
 
 A private inspiration library that runs on your computer. Collect links, images, videos, carousel slides, and thoughts; arrange moodboards and develop projects at your own pace.
 
-**Supabase hosting:** An optional cloud mode is prepared for the owner's project, with private PostgreSQL records, private media storage, and email/password authentication restricted to one owner. Dashboard setup and migration are still required. Follow [the Supabase setup guide](docs/SUPABASE.md). Local mode remains the default.
+**Vercel deployment:** Follow [the deployment guide](docs/VERCEL.md) for the required SQL update, environment variables, and GitHub import settings. Vercel serves the site/API/importer; Supabase provides private records, media, and owner-only login. Deployment and collection migration are separate steps. Local mode remains the default on your computer.
 
 ## Run locally
 

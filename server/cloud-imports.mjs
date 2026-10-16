@@ -1,7 +1,8 @@
 import { randomUUID } from 'node:crypto';
 import { fileTypeFromBuffer } from 'file-type';
 import { clientFor, result } from './cloud-client.mjs';
-import { storageBucket, maxFileMB } from './config.mjs';
+import { storageBucket, maxFileMB, serverlessMode, deploymentOrigin } from './config.mjs';
+import { waitUntil } from '@vercel/functions';
 import { discover, fetchPublic, validUrl } from './source-resolver.mjs';
 
 export const activeImports = new Set();
@@ -29,6 +30,20 @@ async function updateKind(client,itemId) {
 }
 export async function enqueueCloudImport(context, item) {
   validUrl(item.url);
+  if(serverlessMode){
+    const lease=result(await context.client.rpc('gather_prepare_import',{p_item_id:item.id}));
+    if(!lease)return;
+    const work=(async()=>{
+      try{
+        const headers={'Content-Type':'application/json',Authorization:`Bearer ${context.accessToken}`};
+        if(process.env.VERCEL_AUTOMATION_BYPASS_SECRET)headers['x-vercel-protection-bypass']=process.env.VERCEL_AUTOMATION_BYPASS_SECRET;
+        const response=await fetch(new URL('/api/import',deploymentOrigin),{method:'POST',headers,body:JSON.stringify({itemId:item.id,leaseId:lease}),signal:AbortSignal.timeout(270000)});
+        if(!response.ok)throw new Error('The import function could not finish. Retry to collect missing media.');
+      }catch(error){await context.client.from('gather_items').update({import_status:'failed',import_message:String(error.message).slice(0,300)}).eq('id',item.id).eq('import_lease_id',lease);}
+    })();
+    waitUntil(work);
+    return;
+  }
   if (activeImports.has(item.id)) return;
   activeImports.add(item.id);
   try { result(await context.client.from('gather_items').update({import_status:'pending',import_message:''}).eq('id',item.id)); }

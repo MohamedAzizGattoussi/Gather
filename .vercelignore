@@ -1,0 +1,7 @@
+.env
+.env.*
+data/
+*.sqlite*
+*.zip
+__pycache__/
+.git/

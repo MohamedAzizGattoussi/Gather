@@ -415,3 +415,10 @@ The owner declined a desktop shortcut and requested that building begin. A local
 - Integration code, access policies, schema migrations, a container definition, and local-to-cloud migration tooling are prepared. The publishable key was verified using a read-only Auth settings request; it cannot apply schema changes or create an administrator-configured app user.
 - No remote schema changes, user creation, media uploads, or collection migration have been performed. These depend on the dashboard setup in `docs/SUPABASE.md`.
 - Cloud file size defaults to 50 MB and must fit the project's Storage limits. Raising it requires updating both the bucket settings and application configuration. Local file limits remain unchanged.
+
+### Vercel deployment preparation
+
+- The owner selected Vercel as the application host. Supabase remains the database, authentication, and private media provider.
+- Prepared static frontend routing, Node and Python functions, direct signed/resumable uploads, private media redirects, browser-streamed backups, and database-backed import leases.
+- Existing Supabase projects must apply migration 202610160002_vercel.sql. Deployment instructions are in docs/VERCEL.md.
+- No public deployment or authenticated collection migration is claimed. Local data remains available separately.

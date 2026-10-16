@@ -64,6 +64,28 @@ try{
   // Applying the schema twice keeps data and owner policies intact.
   await db.exec(await readFile('supabase/migrations/202610160001_gather.sql','utf8'));
   check((await db.query('select * from public.gather_items')).rows.length===1,'Schema re-application preserves records');
+  await db.exec(await readFile('supabase/migrations/202610160002_vercel.sql','utf8'));
+  await role('authenticated',owner);
+  await db.exec("update public.gather_items set url='https://example.com/post' where id='item'");
+  const lease=(await db.query("select public.gather_prepare_import('item') as lease")).rows[0].lease;
+  check(!!lease,'Vercel import creates a persistent lease');
+  check((await db.query("select public.gather_prepare_import('item') as lease")).rows[0].lease===null,'A second function cannot enqueue an already leased import');
+  check((await db.query('select public.gather_start_import($1,$2) as source',['item',other])).rows[0].source===null,'An incorrect lease cannot claim the import');
+  check((await db.query('select public.gather_start_import($1,$2) as source',['item',lease])).rows[0].source==='https://example.com/post','The correct lease starts the import');
+  check((await db.query('select public.gather_start_import($1,$2) as source',['item',lease])).rows[0].source===null,'Duplicate worker requests do not restart an active import');
+  await db.exec('select public.gather_expire_imports()');
+  check((await db.query("select import_status from public.gather_items where id='item'")).rows[0].import_status==='importing','Polling a different function preserves an active lease');
+  await db.exec("update public.gather_items set import_expires_at='2000-01-01' where id='item'; select public.gather_expire_imports()");
+  check((await db.query("select import_status from public.gather_items where id='item'")).rows[0].import_status==='failed','Expired imports become retryable');
+  await db.exec(`insert into public.gather_uploads(id,item_id,filename,original_name,expected_size) values('upload','item','${owner}/item/upload','My photo',100)`);
+  await rejected("select public.gather_finish_upload('upload','image/jpeg',99)",'Incomplete uploads cannot finalize');
+  await db.exec("select public.gather_finish_upload('upload','image/jpeg',100)");
+  check((await db.query("select original_name from public.gather_assets where id='upload'")).rows[0].original_name==='My photo','Verified direct uploads become Library media');
+  await db.exec("select public.gather_finish_upload('upload','image/jpeg',100)");
+  check((await db.query("select count(*)::int as count from public.gather_assets where id='upload'")).rows[0].count===1,'Upload finalization is idempotent');
+  await role('authenticated',other);
+  check((await db.query('select * from public.gather_uploads')).rows.length===0,'Upload intents are private to the owner');
+  await rejected("select public.gather_prepare_import('item')",'Another account cannot enqueue owner imports');
 }finally{await db.close();}
 
 // Exercise the actual cloud HTTP startup without creating accounts or writing to Supabase.

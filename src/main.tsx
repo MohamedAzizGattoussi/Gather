@@ -2,12 +2,13 @@ import React, { useEffect, useRef, useState, createContext, useContext, type Rea
 import { createRoot } from 'react-dom/client';
 import { ArrowDownToLine, ArrowLeft, ArrowRight, ArrowUpRight, Check, ChevronDown, ChevronLeft, ChevronRight, Copy, ExternalLink, FileText, Folder, Grip, Image as ImageIcon, LayoutGrid, Link as LinkIcon, LoaderCircle, LockKeyhole, LogOut, Maximize, Minus, MoreHorizontal, MousePointer2, Move, Plus, Search, Settings, SlidersHorizontal, StickyNote, Trash2, Upload, Video, X, ZoomIn, ZoomOut } from 'lucide-react';
 import { api } from './api';
+import { downloadBackup } from './cloud-files';
 import { navigationFor } from './navigation';
 import { MediaSlider } from './MediaSlider';
 import type { Asset, Board, Element, Item, Project, State } from './types';
 import './styles.css';
 
-const ConfigContext = createContext({ mode: 'local', maxFileMB: 150 });
+const ConfigContext = createContext({ mode: 'local', maxFileMB: 150, directUploads: false, browserBackup: false });
 const empty: State = { items: [], boards: [], projects: [] };
 const uid = () => crypto.randomUUID();
 const itemName = (item: Item) => item.title || (item.note ? item.note.slice(0, 70) : domain(item.url) || 'Untitled reference');
@@ -17,7 +18,7 @@ const busyImport = (item: Item) => ['pending', 'importing'].includes(item.import
 
 function App() {
   const [auth, setAuth] = useState<boolean | null>(null);
-  const [config, setConfig] = useState({ mode: 'local', maxFileMB: 150 });
+  const [config, setConfig] = useState({ mode: 'local', maxFileMB: 150, directUploads: false, browserBackup: false });
   const [state, setState] = useState<State>(empty);
   const [route, setRoute] = useState(location.pathname);
   const [modal, setModal] = useState<'save' | 'board' | 'project' | 'settings' | null>(null);
@@ -42,7 +43,7 @@ function App() {
     history.pushState({}, '', path); setRoute(path); setSearch('');
   }
   useEffect(() => {
-    Promise.all([api<{ authenticated: boolean }>('/session'), api<{ mode: string; maxFileMB: number }>('/config')]).then(([session, config]) => { setConfig(config); setAuth(session.authenticated); }).catch(e => setLoadError(e.message));
+    Promise.all([api<{ authenticated: boolean }>('/session'), api<{ mode: string; maxFileMB: number; directUploads?: boolean; browserBackup?: boolean }>('/config')]).then(([session, config]) => { setConfig({ ...config, directUploads: !!config.directUploads, browserBackup: !!config.browserBackup }); setAuth(session.authenticated); }).catch(e => setLoadError(e.message));
     const pop = async () => {
       const target = location.pathname; const pending: Promise<boolean>[] = [];
       const allowed = window.dispatchEvent(new CustomEvent('gather:before-navigate', { cancelable: true, detail: pending }));
@@ -305,10 +306,11 @@ function Canvas({ board, items, onBack, refresh, openItem, toast }: { board: Boa
 }
 
 function SettingsModal({ close, logout }: { close: () => void; logout: () => Promise<void> }) {
-  const { mode } = useContext(ConfigContext);
+  const { mode, browserBackup } = useContext(ConfigContext);
+  const [backingUp,setBackingUp] = useState(false);
   const [settings, setSettings] = useState<{dataDir: string} | null>(null); const [current, setCurrent] = useState(''); const [password, setPassword] = useState(''); const [message, setMessage] = useState(''); const [busy, setBusy] = useState(false);
   useEffect(() => { api<{dataDir: string}>('/settings').then(setSettings).catch(e => setMessage(e.message)); }, []);
-  return <Modal title="Your little corner" subtitle={mode === 'supabase' ? 'Private by default. Only your account can open this collection.' : 'Private by default. Everything stays on this computer.'} close={close}><div className="settings-section"><span className="tiny-label">YOUR COLLECTION LIVES HERE</span><code>{settings?.dataDir || 'Loading…'}</code><p>{mode === 'supabase' ? 'Your references and media are stored privately in your Gather account. Download an independent backup whenever you need one.' : 'Saved media and your database live together. Back up both to keep your collection safe.'}</p><a className="secondary" href="/api/backup"><ArrowDownToLine size={15}/>Download a full backup</a><p className="field-hint">Includes your database, images, videos, and restore instructions.<br/>Keep this private archive somewhere safe.</p></div><details className="settings-section"><summary>Change your password</summary><form onSubmit={async e => { e.preventDefault(); setBusy(true); try { await api('/password', { current, password }); setCurrent(''); setPassword(''); setMessage('Your password has been changed.'); } catch(e) { setMessage((e as Error).message); } finally { setBusy(false); } }}><label className="field-label">Current password<input type="password" value={current} onChange={e => setCurrent(e.target.value)} autoComplete="current-password" required/></label><label className="field-label">New password<input type="password" value={password} onChange={e => setPassword(e.target.value)} autoComplete="new-password" minLength={mode === 'supabase' ? 12 : 8} required/></label><button className="secondary" disabled={busy}>Update password</button></form></details>{message && <p role="status" className="field-hint">{message}</p>}<footer className="modal-footer"><span><span className="local-dot"/>{mode === 'supabase' ? 'Private owner account' : 'Local to this computer'}</span><button className="text-button" onClick={() => logout().catch(e => setMessage(e.message))}><LogOut size={15}/>Lock Gather</button></footer></Modal>;
+  return <Modal title="Your little corner" subtitle={mode === 'supabase' ? 'Private by default. Only your account can open this collection.' : 'Private by default. Everything stays on this computer.'} close={close}><div className="settings-section"><span className="tiny-label">YOUR COLLECTION LIVES HERE</span><code>{settings?.dataDir || 'Loading…'}</code><p>{mode === 'supabase' ? 'Your references and media are stored privately in your Gather account. Download an independent backup whenever you need one.' : 'Saved media and your database live together. Back up both to keep your collection safe.'}</p><button className="secondary" disabled={backingUp} onClick={async()=>{setBackingUp(true);setMessage('');try{await downloadBackup(browserBackup,api);}catch(error){setMessage((error as Error).message);}finally{setBackingUp(false);}}}>{backingUp?<LoaderCircle className="spin" size={15}/>:<ArrowDownToLine size={15}/>} {backingUp?'Preparing your backup...':'Download a full backup'}</button><p className="field-hint">Includes your database, images, videos, and restore instructions.<br/>Keep this private archive somewhere safe.</p></div><details className="settings-section"><summary>Change your password</summary><form onSubmit={async e => { e.preventDefault(); setBusy(true); try { await api('/password', { current, password }); setCurrent(''); setPassword(''); setMessage('Your password has been changed.'); } catch(e) { setMessage((e as Error).message); } finally { setBusy(false); } }}><label className="field-label">Current password<input type="password" value={current} onChange={e => setCurrent(e.target.value)} autoComplete="current-password" required/></label><label className="field-label">New password<input type="password" value={password} onChange={e => setPassword(e.target.value)} autoComplete="new-password" minLength={mode === 'supabase' ? 12 : 8} required/></label><button className="secondary" disabled={busy}>Update password</button></form></details>{message && <p role="status" className="field-hint">{message}</p>}<footer className="modal-footer"><span><span className="local-dot"/>{mode === 'supabase' ? 'Private owner account' : 'Local to this computer'}</span><button className="text-button" onClick={() => logout().catch(e => setMessage(e.message))}><LogOut size={15}/>Lock Gather</button></footer></Modal>;
 }
 
 createRoot(document.getElementById('root')!).render(<App/>);

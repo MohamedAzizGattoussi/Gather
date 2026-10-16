@@ -4,7 +4,12 @@
   "private": true,
   "type": "module",
   "engines": {
-    "node": ">=24"
+    "node": "24.x"
+  },
+  "overrides": {
+    "@vercel/routing-utils": {
+      "path-to-regexp": "6.3.0"
+    }
   },
   "scripts": {
     "start": "node server/index.mjs",
@@ -12,26 +17,31 @@
     "build": "tsc --noEmit && vite build",
     "check": "node scripts/check.mjs",
     "check:supabase": "node scripts/check-supabase.mjs",
+    "check:vercel": "node scripts/check-vercel.mjs && python scripts/check-python.py",
     "migrate:supabase": "node scripts/migrate-supabase.mjs",
     "restore:supabase": "node scripts/restore-supabase.mjs",
     "setup:imports": "python -m pip install --upgrade -r server/requirements.txt"
   },
   "dependencies": {
     "@supabase/supabase-js": "^2.118.0",
+    "@vercel/functions": "^3.10.1",
     "archiver": "^8.0.0",
     "cheerio": "^1.1.2",
+    "client-zip": "^2.5.1",
     "express": "^5.1.0",
     "file-type": "^21.0.0",
     "ipaddr.js": "^2.2.0",
     "lucide-react": "^0.468.0",
     "multer": "^2.0.2",
     "react": "^19.2.0",
-    "react-dom": "^19.2.0"
+    "react-dom": "^19.2.0",
+    "tus-js-client": "^4.3.1"
   },
   "devDependencies": {
     "@electric-sql/pglite": "^0.5.10",
     "@types/react": "^19.2.0",
     "@types/react-dom": "^19.2.0",
+    "@vercel/routing-utils": "^6.6.0",
     "@vitejs/plugin-react": "^5.0.0",
     "typescript": "^5.9.0",
     "vite": "^7.1.0"
